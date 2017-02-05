@@ -41,6 +41,21 @@ function ToUTF8($filename, $destination)
 	}
 }
 
+// See: http://stackoverflow.com/questions/27907913/php-trying-to-get-fgets-to-trigger-both-on-crlf-cr-and-lf
+final class EOLStreamFilter extends php_user_filter
+{
+	public function filter($in, $out, &$consumed, $closing)
+	{
+		while($bucket = stream_bucket_make_writeable($in))
+		{
+			$bucket->data = str_replace(["\r\n", "\r"], "\n", $bucket->data);
+			$consumed += $bucket->datalen;
+			stream_bucket_append($out, $bucket);
+		}
+		return PSFS_PASS_ON;
+	}
+}
+
 // Argument 1 is path to video file
 $path = $argv[1];
 
@@ -101,22 +116,68 @@ if(is_file($path))
 	}
 	
 	echo "\tMerging...";
-	exec('mkvmerge -o '.escapeshellarg($destination).' '.escapeshellarg($path).' '.$sub_options, $output, $result);
+	
+	$command = 'mkvmerge -o '.escapeshellarg($destination).' '.escapeshellarg($path).' '.$sub_options;
+	$process = proc_open($command, [
+		0 => ['pipe', 'r'], // pipe stdin
+		1 => ['pipe', 'w'], // pipe stdout
+		2 => ['pipe', 'w']  // pipe stderr
+	], $pipes);
+	
+	if(is_resource($process))
+	{
+		stream_filter_register("EOL", "EOLStreamFilter");
+		stream_filter_append($pipes[1], "EOL");
+		$out = '';
+	
+		// 'Merging...' => 'Merging : 100%'
+		echo "\033[3D"; // Move 3 characters backward
+		echo ' :     ';
+		flush();
+	
+		while(($o = fgets($pipes[1], 22)) !== false)
+		{
+			if(preg_match('/:\s*([0-9]+)%/', $o, $matches))
+			{
+				echo "\033[4D"; // Move 4 characters backward
+				echo str_pad($matches[1], 3, ' ', STR_PAD_LEFT) . '%'; // Output is always 5 characters long
+				sleep(1); // wait for a while, so we see the animation
+				flush();
+			}
+			else
+			{
+				$out .= $o;
+			}
+		}
+	
+		$errors = stream_get_contents($pipes[2]);
+	}
+	
+	// Close pipes
+	foreach($pipes as $pipe)
+	{
+		fclose($pipe);
+	}
 
 	// Cleanup
 	foreach($subtitles as $sub)
 	{
 		unlink($sub);
 	}
-
-	if($result == 0)
+	
+	if(proc_close($process) == 0)
 	{
-		echo "\n\tDone!\n";
+		// 'Merging : 100%' => 'Merging : Done!'
+		echo "\033[4D"; // Move 4 characters backward
+		echo "Done!\n";
 		return 0;
 	}
 	else
 	{
-		echo "\n\tFailed. ($output[1])\n";
+		// 'Merging : 100%' => 'Merging : Done!'
+		echo "\033[4D"; // Move 4 characters backward
+		echo "Failed!\n\t\t";
+		echo $errors ?: preg_replace('/^.+\n/', '', $out);
 		return 1;
 	}
 }
