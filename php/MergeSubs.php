@@ -75,7 +75,7 @@ if(is_file($path))
 			echo "\tSubtitle 'fre' found!\n";
 			$subtitles['fre'] = $file_path;
 		}
-		else if(preg_match('/\.([a-z]{3})$/i', $filename, $matches))
+		else if(preg_match('/\.([a-z]{2,3})$/i', $filename, $matches))
 		{
 			echo "\tSubtitle '$matches[1]' found!\n";
 			$subtitles[$matches[1]] = $file_path;
@@ -96,7 +96,7 @@ if(is_file($path))
 		$subtitles[$key] = $sub . '~';
 		
 		// Set french preferred language
-		$opt = '--language 0:'.$key.' '.escapeshellarg($sub);
+		$opt = '--language 0:'.$key.' '.escapeshellarg($sub . '~');
 		if($key == 'fre')
 		{
 			array_unshift($sub_options, $opt);
@@ -116,7 +116,8 @@ if(is_file($path))
 	}
 	
 	echo "\tMerging...";
-	
+	$errors = $out = '';
+	$exit_status = 1;
 	$command = 'mkvmerge -o '.escapeshellarg($destination).' '.escapeshellarg($path).' '.$sub_options;
 	$process = proc_open($command, [
 		0 => ['pipe', 'r'], // pipe stdin
@@ -128,7 +129,6 @@ if(is_file($path))
 	{
 		stream_filter_register("EOL", "EOLStreamFilter");
 		stream_filter_append($pipes[1], "EOL");
-		$out = '';
 	
 		// 'Merging...' => 'Merging : 100%'
 		echo "\033[3D"; // Move 3 characters backward
@@ -151,12 +151,14 @@ if(is_file($path))
 		}
 	
 		$errors = stream_get_contents($pipes[2]);
-	}
-	
-	// Close pipes
-	foreach($pipes as $pipe)
-	{
-		fclose($pipe);
+
+		// Close pipes
+		foreach($pipes as $pipe)
+		{
+			fclose($pipe);
+		}
+		
+		$exit_status = proc_close($process);
 	}
 
 	// Cleanup
@@ -165,7 +167,7 @@ if(is_file($path))
 		unlink($sub);
 	}
 	
-	if(proc_close($process) == 0)
+	if($exit_status == 0)
 	{
 		// 'Merging : 100%' => 'Merging : Done!'
 		echo "\033[4D"; // Move 4 characters backward
